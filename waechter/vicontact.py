@@ -107,19 +107,25 @@ def lauf(m):
 
         if "/login" in page.url or page.locator("input[type=password]").count():
             print("Login nötig")
-            if "/login" not in page.url:
-                page.goto(BASE + "/s/login/", wait_until="domcontentloaded", timeout=60000)
-            try:
-                page.locator("input[type=password]:visible").first.wait_for(timeout=45000)
-            except Exception:
-                # Nur Aufbau der Login-Seite ausgeben (keine Daten), damit man den Fehler findet
-                print("Kein Passwortfeld gefunden. URL:", page.url.split("?")[0])
-                for i in page.locator("input").all()[:15]:
+            gefunden = False
+            # Mehrere Login-Seiten probieren (Experience-Cloud-Seite rendert headless manchmal nicht)
+            for pfad in ["/s/login/", "/login", "/secur/login_portal.jsp"]:
+                try:
+                    page.goto(BASE + pfad, wait_until="networkidle", timeout=60000)
+                except Exception:
+                    pass
+                try:
+                    page.locator("input[type=password]:visible").first.wait_for(timeout=30000)
+                    print("Login-Seite:", pfad); gefunden = True; break
+                except Exception:
+                    # Nur Aufbau der Login-Seite ausgeben (keine Kundendaten), zur Fehlersuche
+                    print("Kein Passwortfeld auf", pfad, "| URL:", page.url.split("?")[0],
+                          "| Titel:", page.title()[:60])
                     try:
-                        print(" input:", i.get_attribute("type"), i.get_attribute("name"),
-                              i.get_attribute("placeholder"), "sichtbar" if i.is_visible() else "versteckt")
+                        print("  Text:", page.locator("body").inner_text(timeout=3000)[:200].replace("\n", " "))
                     except Exception:
                         pass
+            if not gefunden:
                 warne(m, "loginseite", "ViContact: Login-Seite unbekannt", "Cloud-Wächter findet das Login-Feld nicht.")
                 b.close(); return
             felder = page.locator("input:visible:not([type=password]):not([type=hidden])"
