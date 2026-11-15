@@ -1,0 +1,147 @@
+"""ViContact Lead-Wächter (Cloud) – Mair Gebäudetechnik
+Loggt sich ins ViContact-Portal ein, liest die Kachel "Neue Leads" und schickt bei neuen Leads
+eine Push-Nachricht über ntfy. Es werden KEINE Kundendaten gelesen, ausgegeben oder verschickt.
+Zugangsdaten kommen nur aus GitHub-Secrets. Logs sind öffentlich -> nie Daten ausgeben!
+"""
+import base64, hashlib, json, os, re, sys, urllib.request
+from pathlib import Path
+from cryptography.fernet import Fernet
+from playwright.sync_api import sync_playwright
+
+BASE = "https://vicontact.viessmann-climatesolutions.com"
+STATE = Path("state"); STATE.mkdir(exist_ok=True)
+COOKIES, MERK = STATE / "cookies.json", STATE / "merk.json"
+USER = os.environ.get("VICONTACT_USER", "")
+PW = os.environ.get("VICONTACT_PASS", "")
+TOPIC = os.environ.get("NTFY_TOPIC", "")
+TOKEN = os.environ.get("NTFY_TOKEN", "")
+MAIL = os.environ.get("NTFY_MAIL", "")
+
+
+# Sitzungs-Cookies liegen nur VERSCHLÜSSELT im Actions-Cache (Schlüssel aus dem Secret abgeleitet,
+# fremde Forks/PRs bekommen keine Secrets und können den Cache damit nicht lesen).
+SITZUNG = STATE / "sitzung.enc"
+
+
+def _fernet():
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(("mair-vc|" + PW).encode()).digest()))
+
+
+def sitzung_laden():
+    try:
+        COOKIES.write_bytes(_fernet().decrypt(SITZUNG.read_bytes())); return True
+    except Exception:
+        return False
+
+
+def sitzung_sichern():
+    try:
+        SITZUNG.write_bytes(_fernet().encrypt(COOKIES.read_bytes()))
+    finally:
+        COOKIES.unlink(missing_ok=True)  # Klartext nie im Cache lassen
+
+
+def merk():
+    try:
+        return json.loads(MERK.read_text())
+    except Exception:
+        return {"letzteZahl": 0, "letzteWarnung": ""}
+
+
+def push(titel, text, mail=False):
+    if not TOPIC:
+        print("kein NTFY_TOPIC gesetzt"); return
+    body = {"topic": TOPIC, "title": titel, "message": text, "priority": 5, "tags": ["bell"],
+            "click": BASE + "/s/marketplace"}
+    if mail and TOKEN and MAIL:
+        body["email"] = MAIL
+    headers = {"Content-Type": "application/json"}
+    if TOKEN:
+        headers["Authorization"] = "Bearer " + TOKEN
+    req = urllib.request.Request("https://ntfy.sh/", data=json.dumps(body).encode(), headers=headers)
+    try:
+        urllib.request.urlopen(req, timeout=20); print("Push gesendet")
+    except Exception as e:
+        print("Push-Fehler:", type(e).__name__)
+
+
+def warne(m, key, titel, text):
+    # gleiche Warnung nicht bei jedem Lauf wiederholen
+    if m.get("letzteWarnung") != key:
+        push(titel, text); m["letzteWarnung"] = key
+
+
+def leads_zahl(page):
+    # Kacheln stecken in einem iframe: "0\nNeue Leads\n4\nKunden kontaktieren ..."
+    for f in page.frames:
+        try:
+            t = f.locator("body").inner_text(timeout=3000)
+            hit = re.search(r"(\d+)\s*\n\s*Neue Leads", t)
+            if hit:
+                return int(hit.group(1))
+        except Exception:
+            pass
+    return None
+
+
+def main():
+    m = merk()
+    if not (USER and PW):
+        print("Secrets VICONTACT_USER / VICONTACT_PASS fehlen"); sys.exit(1)
+    try:
+        lauf(m)
+    finally:
+        if COOKIES.exists():
+            sitzung_sichern()
+        MERK.write_text(json.dumps(m))
+
+
+def lauf(m):
+    hat_sitzung = sitzung_laden()
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        ctx = b.new_context(locale="de-DE", storage_state=str(COOKIES) if hat_sitzung else None)
+        page = ctx.new_page()
+        page.goto(BASE + "/s/", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(8000)
+
+        if "/login" in page.url or page.locator("input[type=password]").count():
+            print("Login nötig")
+            page.goto(BASE + "/s/login/", wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(5000)
+            page.locator("input[type=email], input[name*=user i], input[type=text]").first.fill(USER)
+            page.locator("input[type=password]").first.fill(PW)
+            page.locator("button:has-text('Anmelden'), button:has-text('Log in'), "
+                         "button:has-text('Login'), input[type=submit]").first.click()
+            page.wait_for_timeout(10000)
+            if re.search(r"verif|identity|bestätig", page.url + " " + page.title(), re.I) or \
+               page.locator("input[name*=code i], input[id*=code i]").count():
+                print("Viessmann will einen Bestätigungscode")
+                warne(m, "code", "ViContact: Login braucht Code",
+                      "Der Cloud-Wächter kann sich nicht einloggen (Bestätigungscode).")
+                MERK.write_text(json.dumps(m)); b.close(); return
+            if "/login" in page.url:
+                print("Login fehlgeschlagen")
+                warne(m, "login", "ViContact: Login fehlgeschlagen",
+                      "Cloud-Wächter kommt nicht ins Portal. Passwort geändert?")
+                MERK.write_text(json.dumps(m)); b.close(); return
+            page.goto(BASE + "/s/", wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(8000)
+
+        n = leads_zahl(page)
+        print("Neue Leads:", n)  # nur die Zahl, keine Kundendaten
+        if n is None:
+            warne(m, "kachel", "ViContact: Kachel nicht lesbar", "Cloud-Wächter findet 'Neue Leads' nicht.")
+        else:
+            m["letzteWarnung"] = ""
+            if n > 0 and n != m.get("letzteZahl", 0):
+                push(f"ViContact: {n} neue{'' if n > 1 else 'r'} Lead{'s' if n > 1 else ''}!",
+                     "Jetzt im Portal unter 'Neue Leads' annehmen.", mail=True)
+            m["letzteZahl"] = n
+        ctx.storage_state(path=str(COOKIES))
+        b.close()
+    MERK.write_text(json.dumps(m))
+
+
+if __name__ == "__main__":
+    main()
