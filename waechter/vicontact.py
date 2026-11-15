@@ -109,13 +109,24 @@ def lauf(m):
             print("Login nötig")
             # ViContact-Login läuft über den Button "Login mit Climate Solutions ..." (Viessmann-Konto)
             page.goto(BASE + "/s/login/", wait_until="networkidle", timeout=60000)
-            sso = page.get_by_text(re.compile(r"Login mit", re.I)).first
-            try:
-                sso.wait_for(timeout=30000); sso.click()
-            except Exception:
-                print("SSO-Button nicht gefunden")
+            page.wait_for_timeout(5000)
+            klickbar = page.locator("a:visible, button:visible, [role=button]:visible, input[type=submit]:visible")
+            sso = klickbar.filter(has_text=re.compile(r"climate|login mit|anmelden mit", re.I))
+            if not sso.count():
+                print("SSO-Button nicht gefunden. Klickbare Elemente:")
+                for e in klickbar.all()[:20]:
+                    try:
+                        print("  -", (e.inner_text(timeout=1000) or e.get_attribute("value") or "")[:50].replace("\n", " "))
+                    except Exception:
+                        pass
                 warne(m, "loginseite", "ViContact: Login-Seite unbekannt", "Cloud-Wächter findet den Login-Button nicht.")
                 b.close(); return
+            alt = page.url
+            sso.first.click()
+            try:
+                page.wait_for_url(lambda u: u != alt, timeout=30000)
+            except Exception:
+                pass
             page.wait_for_load_state("networkidle", timeout=60000)
             print("Login-Anbieter:", page.url.split("?")[0].split("/")[2])  # nur der Servername
 
