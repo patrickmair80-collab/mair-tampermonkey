@@ -1,0 +1,42 @@
+name: ViContact Lead-Wächter
+
+on:
+  schedule:
+    - cron: "*/20 4-17 * * *"   # alle 20 Min., ca. 5–18 Uhr deutscher Winterzeit (UTC+1)
+  workflow_dispatch: {}          # zum Testen per Hand starten
+
+concurrency: vicontact-waechter
+
+jobs:
+  pruefen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Zustand laden (Sitzung + letzte Zahl)
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: vc-state-${{ github.run_id }}
+          restore-keys: vc-state-
+      - name: Playwright installieren
+        run: |
+          pip install playwright==1.48.0 cryptography==43.0.3
+          python -m playwright install --with-deps chromium
+      - name: Portal prüfen
+        env:
+          VICONTACT_USER: ${{ secrets.VICONTACT_USER }}
+          VICONTACT_PASS: ${{ secrets.VICONTACT_PASS }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          NTFY_MAIL: info@mair-haustechnik.de
+        run: python waechter/vicontact.py
+      - name: Zustand speichern
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: vc-state-${{ github.run_id }}
