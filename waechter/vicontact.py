@@ -107,46 +107,57 @@ def lauf(m):
 
         if "/login" in page.url or page.locator("input[type=password]").count():
             print("Login nötig")
-            gefunden = False
-            # Mehrere Login-Seiten probieren (Experience-Cloud-Seite rendert headless manchmal nicht)
-            for pfad in ["/s/login/", "/login", "/secur/login_portal.jsp"]:
+            # ViContact-Login läuft über den Button "Login mit Climate Solutions ..." (Viessmann-Konto)
+            page.goto(BASE + "/s/login/", wait_until="networkidle", timeout=60000)
+            sso = page.get_by_text(re.compile(r"Login mit", re.I)).first
+            try:
+                sso.wait_for(timeout=30000); sso.click()
+            except Exception:
+                print("SSO-Button nicht gefunden")
+                warne(m, "loginseite", "ViContact: Login-Seite unbekannt", "Cloud-Wächter findet den Login-Button nicht.")
+                b.close(); return
+            page.wait_for_load_state("networkidle", timeout=60000)
+            print("Login-Anbieter:", page.url.split("?")[0].split("/")[2])  # nur der Servername
+
+            def sichtbar(sel):
+                return page.locator(sel + ":visible").first
+
+            textfeld = ("input:not([type=password]):not([type=hidden]):not([type=checkbox])"
+                        ":not([type=submit]):not([type=button]):not([type=radio])")
+            knopf_re = re.compile(r"anmelden|log ?in|einloggen|weiter|next|continue|sign in", re.I)
+
+            def absenden(feld):
+                k = page.locator("button:visible, input[type=submit]:visible").filter(has_text=knopf_re)
+                if k.count():
+                    k.first.click()
+                else:
+                    feld.press("Enter")
+
+            try:
+                sichtbar(textfeld).wait_for(timeout=30000)
+                sichtbar(textfeld).fill(USER)
+                if not page.locator("input[type=password]:visible").count():
+                    absenden(sichtbar(textfeld))   # zweistufig: erst E-Mail, dann Passwort
+                sichtbar("input[type=password]").wait_for(timeout=30000)
+                sichtbar("input[type=password]").fill(PW)
+                absenden(sichtbar("input[type=password]"))
+            except Exception:
+                print("Login-Formular nicht wie erwartet | Titel:", page.title()[:60])
                 try:
-                    page.goto(BASE + pfad, wait_until="networkidle", timeout=60000)
+                    print("  Text:", page.locator("body").inner_text(timeout=3000)[:200].replace("\n", " "))
                 except Exception:
                     pass
-                try:
-                    page.locator("input[type=password]:visible").first.wait_for(timeout=30000)
-                    print("Login-Seite:", pfad); gefunden = True; break
-                except Exception:
-                    # Nur Aufbau der Login-Seite ausgeben (keine Kundendaten), zur Fehlersuche
-                    print("Kein Passwortfeld auf", pfad, "| URL:", page.url.split("?")[0],
-                          "| Titel:", page.title()[:60])
-                    try:
-                        print("  Text:", page.locator("body").inner_text(timeout=3000)[:200].replace("\n", " "))
-                    except Exception:
-                        pass
-            if not gefunden:
-                warne(m, "loginseite", "ViContact: Login-Seite unbekannt", "Cloud-Wächter findet das Login-Feld nicht.")
+                warne(m, "loginform", "ViContact: Login-Formular unbekannt", "Cloud-Wächter kommt mit dem Login nicht klar.")
                 b.close(); return
-            felder = page.locator("input:visible:not([type=password]):not([type=hidden])"
-                                  ":not([type=checkbox]):not([type=submit]):not([type=button])")
-            felder.first.fill(USER)
-            page.locator("input[type=password]:visible").first.fill(PW)
-            knopf = page.locator("button:visible, input[type=submit]:visible").filter(
-                has_text=re.compile(r"anmelden|log ?in|einloggen|weiter", re.I))
-            if knopf.count():
-                knopf.first.click()
-            else:
-                page.locator("input[type=password]:visible").first.press("Enter")
-            page.wait_for_timeout(10000)
+            page.wait_for_timeout(12000)
             if re.search(r"verif|identity|bestätig", page.url + " " + page.title(), re.I) or \
                page.locator("input[name*=code i], input[id*=code i]").count():
                 print("Viessmann will einen Bestätigungscode")
                 warne(m, "code", "ViContact: Login braucht Code",
                       "Der Cloud-Wächter kann sich nicht einloggen (Bestätigungscode).")
                 MERK.write_text(json.dumps(m)); b.close(); return
-            if "/login" in page.url:
-                print("Login fehlgeschlagen")
+            if "vicontact" not in page.url or "/login" in page.url:
+                print("Login fehlgeschlagen | Server:", page.url.split("/")[2], "| Titel:", page.title()[:60])
                 warne(m, "login", "ViContact: Login fehlgeschlagen",
                       "Cloud-Wächter kommt nicht ins Portal. Passwort geändert?")
                 MERK.write_text(json.dumps(m)); b.close(); return
