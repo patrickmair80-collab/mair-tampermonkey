@@ -111,7 +111,8 @@ def lauf(m):
             page.goto(BASE + "/s/login/", wait_until="networkidle", timeout=60000)
             page.wait_for_timeout(5000)
             klickbar = page.locator("a:visible, button:visible, [role=button]:visible, input[type=submit]:visible")
-            sso = klickbar.filter(has_text=re.compile(r"climate|login mit|anmelden mit", re.I))
+            # Echter Button heißt "Jetzt einloggen" (NICHT der Registrieren-Link mit "Climate Solutions")
+            sso = page.locator("button:visible").filter(has_text=re.compile(r"einloggen|anmelden|log ?in", re.I))
             if not sso.count():
                 print("SSO-Button nicht gefunden. Klickbare Elemente:")
                 for e in klickbar.all()[:20]:
