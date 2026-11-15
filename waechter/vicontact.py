@@ -107,12 +107,31 @@ def lauf(m):
 
         if "/login" in page.url or page.locator("input[type=password]").count():
             print("Login nötig")
-            page.goto(BASE + "/s/login/", wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(5000)
-            page.locator("input[type=email], input[name*=user i], input[type=text]").first.fill(USER)
-            page.locator("input[type=password]").first.fill(PW)
-            page.locator("button:has-text('Anmelden'), button:has-text('Log in'), "
-                         "button:has-text('Login'), input[type=submit]").first.click()
+            if "/login" not in page.url:
+                page.goto(BASE + "/s/login/", wait_until="domcontentloaded", timeout=60000)
+            try:
+                page.locator("input[type=password]:visible").first.wait_for(timeout=45000)
+            except Exception:
+                # Nur Aufbau der Login-Seite ausgeben (keine Daten), damit man den Fehler findet
+                print("Kein Passwortfeld gefunden. URL:", page.url.split("?")[0])
+                for i in page.locator("input").all()[:15]:
+                    try:
+                        print(" input:", i.get_attribute("type"), i.get_attribute("name"),
+                              i.get_attribute("placeholder"), "sichtbar" if i.is_visible() else "versteckt")
+                    except Exception:
+                        pass
+                warne(m, "loginseite", "ViContact: Login-Seite unbekannt", "Cloud-Wächter findet das Login-Feld nicht.")
+                b.close(); return
+            felder = page.locator("input:visible:not([type=password]):not([type=hidden])"
+                                  ":not([type=checkbox]):not([type=submit]):not([type=button])")
+            felder.first.fill(USER)
+            page.locator("input[type=password]:visible").first.fill(PW)
+            knopf = page.locator("button:visible, input[type=submit]:visible").filter(
+                has_text=re.compile(r"anmelden|log ?in|einloggen|weiter", re.I))
+            if knopf.count():
+                knopf.first.click()
+            else:
+                page.locator("input[type=password]:visible").first.press("Enter")
             page.wait_for_timeout(10000)
             if re.search(r"verif|identity|bestätig", page.url + " " + page.title(), re.I) or \
                page.locator("input[name*=code i], input[id*=code i]").count():
@@ -129,6 +148,11 @@ def lauf(m):
             page.wait_for_timeout(8000)
 
         n = leads_zahl(page)
+        if n is None:
+            # Kachel-Seite direkt laden (das ist der Inhalt des Startseiten-iframes)
+            page.goto(BASE + "/PCC_HomePage?isdtp=p1", wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(5000)
+            n = leads_zahl(page)
         print("Neue Leads:", n)  # nur die Zahl, keine Kundendaten
         if n is None:
             warne(m, "kachel", "ViContact: Kachel nicht lesbar", "Cloud-Wächter findet 'Neue Leads' nicht.")
