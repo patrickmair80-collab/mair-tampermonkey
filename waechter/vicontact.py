@@ -122,6 +122,15 @@ def lauf(m):
                 warne(m, "loginseite", "ViContact: Login-Seite unbekannt", "Cloud-Wächter findet den Login-Button nicht.")
                 b.close(); return
             alt = page.url
+            # Fehlersuche: fehlgeschlagene Seitenaufrufe nur mit Servername + Fehlerart ausgeben
+            page.on("requestfailed", lambda r: print("  Aufruf fehlgeschlagen:", r.url.split("/")[2],
+                                                     "|", r.failure) if r.resource_type == "document" else None)
+            try:
+                href = sso.first.get_attribute("href") or ""
+                if href:
+                    print("  SSO-Ziel-Server:", href.split("/")[2] if "//" in href else href.split("?")[0])
+            except Exception:
+                pass
             sso.first.click()
             try:
                 page.wait_for_url(lambda u: u != alt, timeout=30000)
